@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: cursorcli2api
+    env: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CODEX_PROVIDER
+        value: cursor-agent
+      - key: CODEX_PRESET
+        value: cursor-auto
+      - key: CURSOR_AGENT_MODEL
+        value: auto
+      - key: CURSOR_AGENT_DISABLE_INDEXING
+        value: "true"
+      - key: CODEX_MAX_CONCURRENCY
+        value: "50"
+      - key: CODEX_TIMEOUT_SECONDS
+        value: "600"
+      - key: CODEX_ADVERTISED_MODELS
+        value: auto,gpt-5.3-codex,gpt-5.2
+      - key: CODEX_GATEWAY_TOKEN
+        sync: false
+      - key: CURSOR_AGENT_API_KEY
+        sync: false
