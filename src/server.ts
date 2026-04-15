@@ -496,6 +496,13 @@ app.get("/debug/config", async (c) => {
     cursor_agent_workspace: settings.cursor_agent_workspace,
     cursor_agent_disable_indexing: settings.cursor_agent_disable_indexing,
     cursor_agent_extra_args: settings.cursor_agent_extra_args,
+    cursor_agent_api_key_set: Boolean(settings.cursor_agent_api_key),
+    cursor_agent_api_key_length: settings.cursor_agent_api_key?.length ?? 0,
+    cursor_agent_api_key_source: process.env.CURSOR_AGENT_API_KEY !== undefined
+      ? "CURSOR_AGENT_API_KEY"
+      : process.env.CURSOR_API_KEY !== undefined
+        ? "CURSOR_API_KEY"
+        : "",
     claude_model: settings.claude_model,
     claude_use_oauth_api: settings.claude_use_oauth_api,
     claude_api_base_url: settings.claude_api_base_url,
