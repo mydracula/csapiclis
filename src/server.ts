@@ -240,11 +240,20 @@ function stripAnsi(text: string): string {
   return (text ?? "").replace(ANSI_ESCAPE_RE, "");
 }
 
+interface CursorConnectivityHostProbe {
+  readonly host: string;
+  readonly dns_ok: boolean;
+  readonly dns_error: string | null;
+  readonly https_ok: boolean;
+  readonly https_error: string | null;
+}
+
 interface CursorConnectivityProbe {
   readonly dns_ok: boolean;
   readonly dns_error: string | null;
   readonly https_ok: boolean;
   readonly https_error: string | null;
+  readonly hosts: readonly CursorConnectivityHostProbe[];
 }
 
 interface ClassifiedProviderError {
@@ -253,7 +262,7 @@ interface ClassifiedProviderError {
   readonly type: "upstream_error" | "network_error" | "auth_error";
 }
 
-async function probeCursorConnectivity(timeoutMs = 3500): Promise<CursorConnectivityProbe> {
+async function probeHostConnectivity(host: string, timeoutMs: number): Promise<CursorConnectivityHostProbe> {
   let dnsOk = false;
   let dnsError: string | null = null;
   let httpsOk = false;
@@ -261,19 +270,19 @@ async function probeCursorConnectivity(timeoutMs = 3500): Promise<CursorConnecti
 
   try {
     const records = await Promise.race([
-      dnsLookup("ap2.cursor.sh", { all: true }),
+      dnsLookup(host, { all: true }),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error(`dns timeout after ${timeoutMs}ms`)), timeoutMs)
       ),
     ]);
     dnsOk = Array.isArray(records) && records.length > 0;
-    if (!dnsOk) dnsError = "no dns records resolved for ap2.cursor.sh";
+    if (!dnsOk) dnsError = `no dns records resolved for ${host}`;
   } catch (e) {
     dnsError = String(e);
   }
 
   try {
-    const resp = await fetch("https://ap2.cursor.sh", {
+    const resp = await fetch(`https://${host}`, {
       method: "HEAD",
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -284,10 +293,37 @@ async function probeCursorConnectivity(timeoutMs = 3500): Promise<CursorConnecti
   }
 
   return {
+    host,
     dns_ok: dnsOk,
     dns_error: dnsError,
     https_ok: httpsOk,
     https_error: httpsError,
+  };
+}
+
+async function probeCursorConnectivity(timeoutMs = 3500): Promise<CursorConnectivityProbe> {
+  const hostsToProbe = ["api2.cursor.sh", "api2direct.cursor.sh", "ap2.cursor.sh"];
+  const hostResults = await Promise.all(hostsToProbe.map((h) => probeHostConnectivity(h, timeoutMs)));
+
+  const primary = hostResults.find((h) => h.host === "api2.cursor.sh") ?? hostResults[0];
+  const backup = hostResults.find((h) => h.host === "api2direct.cursor.sh");
+
+  const dnsOk = primary.dns_ok || Boolean(backup?.dns_ok);
+  const httpsOk = primary.https_ok || Boolean(backup?.https_ok);
+
+  const dnsError = dnsOk
+    ? null
+    : [primary.dns_error, backup?.dns_error].filter(Boolean).join("; ") || "dns probe failed";
+  const httpsError = httpsOk
+    ? null
+    : [primary.https_error, backup?.https_error].filter(Boolean).join("; ") || "https probe failed";
+
+  return {
+    dns_ok: dnsOk,
+    dns_error: dnsError,
+    https_ok: httpsOk,
+    https_error: httpsError,
+    hosts: hostResults,
   };
 }
 

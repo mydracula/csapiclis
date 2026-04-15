@@ -133,7 +133,7 @@ curl http://127.0.0.1:8000/v1/chat/completions \
 | `POST` | `/v1/responses` | OpenAI Responses API |
 | `POST` | `/v1/messages` | Anthropic Messages API |
 | `GET` | `/debug/config` | 查看当前配置 |
-| `GET` | `/debug/cursor-agent` | Cursor Agent 连通性诊断（DNS/HTTPS） |
+| `GET` | `/debug/cursor-agent` | Cursor Agent 连通性诊断（`api2.cursor.sh`/`api2direct.cursor.sh` 的 DNS/HTTPS） |
 
 ## 客户端对接
 
