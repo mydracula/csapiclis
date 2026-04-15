@@ -3,6 +3,7 @@
  */
 
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "fs";
+import { lookup as dnsLookup } from "node:dns/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { randomUUID } from "crypto";
@@ -218,6 +219,9 @@ function openaiError(message: string, statusCode = 500): Response {
 const UPSTREAM_STATUS_RE = /(?:\bAPI Error:\s*|\bfailed:\s*)(\d{3})\b/;
 const HTTPX_STATUS_RE = /\b(?:Client|Server) error '(\d{3})\b/;
 const GENERIC_STATUS_RE = /\bstatus\s*[=:]\s*(\d{3})\b/;
+const ANSI_ESCAPE_RE = /\x1b\[[0-9;]*m/g;
+const CURSOR_INVALID_KEY_RE = /\bprovided api key is invalid\b/i;
+const CURSOR_NETWORK_HINT_RE = /\b(ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|ECONNREFUSED|getaddrinfo|dns|resolve|fetch failed|network|ap2\.cursor\.sh)\b/i;
 
 function extractUpstreamStatusCode(err: unknown): number | null {
   const msg = String(err ?? "").trim();
@@ -230,6 +234,106 @@ function extractUpstreamStatusCode(err: unknown): number | null {
     }
   }
   return null;
+}
+
+function stripAnsi(text: string): string {
+  return (text ?? "").replace(ANSI_ESCAPE_RE, "");
+}
+
+interface CursorConnectivityProbe {
+  readonly dns_ok: boolean;
+  readonly dns_error: string | null;
+  readonly https_ok: boolean;
+  readonly https_error: string | null;
+}
+
+interface ClassifiedProviderError {
+  readonly status: number;
+  readonly message: string;
+  readonly type: "upstream_error" | "network_error" | "auth_error";
+}
+
+async function probeCursorConnectivity(timeoutMs = 3500): Promise<CursorConnectivityProbe> {
+  let dnsOk = false;
+  let dnsError: string | null = null;
+  let httpsOk = false;
+  let httpsError: string | null = null;
+
+  try {
+    const records = await Promise.race([
+      dnsLookup("ap2.cursor.sh", { all: true }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`dns timeout after ${timeoutMs}ms`)), timeoutMs)
+      ),
+    ]);
+    dnsOk = Array.isArray(records) && records.length > 0;
+    if (!dnsOk) dnsError = "no dns records resolved for ap2.cursor.sh";
+  } catch (e) {
+    dnsError = String(e);
+  }
+
+  try {
+    const resp = await fetch("https://ap2.cursor.sh", {
+      method: "HEAD",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    httpsOk = resp.status >= 100 && resp.status < 600;
+    if (!httpsOk) httpsError = `unexpected http status ${resp.status}`;
+  } catch (e) {
+    httpsError = String(e);
+  }
+
+  return {
+    dns_ok: dnsOk,
+    dns_error: dnsError,
+    https_ok: httpsOk,
+    https_error: httpsError,
+  };
+}
+
+async function classifyProviderError(provider: string, err: unknown): Promise<ClassifiedProviderError> {
+  const raw = String(err ?? "").trim();
+  const clean = stripAnsi(raw);
+  const statusFromMsg = extractUpstreamStatusCode(clean);
+
+  if (provider !== "cursor-agent") {
+    return {
+      status: statusFromMsg ?? 500,
+      message: clean,
+      type: "upstream_error",
+    };
+  }
+
+  const looksLikeInvalidKey = CURSOR_INVALID_KEY_RE.test(clean);
+  const looksLikeNetwork = CURSOR_NETWORK_HINT_RE.test(clean);
+
+  if (looksLikeInvalidKey || looksLikeNetwork) {
+    const probe = await probeCursorConnectivity();
+    if (!probe.dns_ok || !probe.https_ok) {
+      const networkHints: string[] = [];
+      if (!probe.dns_ok && probe.dns_error) networkHints.push(`dns=${probe.dns_error}`);
+      if (!probe.https_ok && probe.https_error) networkHints.push(`https=${probe.https_error}`);
+      const hintText = networkHints.length > 0 ? networkHints.join("; ") : "unknown network issue";
+      return {
+        status: 503,
+        type: "network_error",
+        message: `cursor-agent upstream connectivity check failed (${hintText}). This usually indicates Render egress/DNS network issues instead of API key problems.\nOriginal error: ${clean}`,
+      };
+    }
+    if (looksLikeInvalidKey) {
+      return {
+        status: statusFromMsg ?? 401,
+        type: "auth_error",
+        message: clean,
+      };
+    }
+  }
+
+  return {
+    status: statusFromMsg ?? 500,
+    message: clean,
+    type: "upstream_error",
+  };
 }
 
 function truncateForLog(text: string): string {
@@ -534,6 +638,26 @@ app.get("/debug/config", async (c) => {
     log_mode: settings.effectiveLogMode(),
     log_events: settings.log_events,
     log_max_chars: settings.log_max_chars,
+  });
+});
+
+app.get("/debug/cursor-agent", async (c) => {
+  try {
+    checkAuth(c.req.header("authorization"));
+  } catch (e) {
+    return c.json({ error: { message: String(e) } }, 401);
+  }
+  const connectivity = await probeCursorConnectivity();
+  return c.json({
+    cursor_agent_bin: settings.cursor_agent_bin,
+    cursor_agent_api_key_set: Boolean(settings.cursor_agent_api_key),
+    cursor_agent_api_key_length: settings.cursor_agent_api_key?.length ?? 0,
+    cursor_agent_api_key_source: process.env.CURSOR_AGENT_API_KEY !== undefined
+      ? "CURSOR_AGENT_API_KEY"
+      : process.env.CURSOR_API_KEY !== undefined
+        ? "CURSOR_API_KEY"
+        : "",
+    connectivity,
   });
 });
 
@@ -1357,10 +1481,17 @@ async function handleChatCompletions(
                       shouldRetry = true;
                       break;
                     }
-                    const status = extractUpstreamStatusCode(errMsg) ?? 500;
-                    logger.error({ respId, status }, "[%s] stream error status=%d %s", respId, status, truncateForLog(errMsg));
+                    const classified = await classifyProviderError(provider, errMsg);
+                    logger.error(
+                      { respId, status: classified.status, type: classified.type },
+                      "[%s] stream error status=%d type=%s %s",
+                      respId,
+                      classified.status,
+                      classified.type,
+                      truncateForLog(classified.message)
+                    );
                     const errObj = {
-                      error: { message: errMsg, type: "upstream_error", code: status },
+                      error: { message: classified.message, type: classified.type, code: classified.status },
                     };
                     safeEnqueue(encoder.encode(`event: error\ndata: ${JSON.stringify(errObj)}\n\n`));
                   }
@@ -1483,9 +1614,17 @@ async function handleChatCompletions(
           );
         } catch (e) {
           activeRequests--;
-          logger.error({ respId, err: e }, "[%s] stream error", respId);
+          const classified = await classifyProviderError(provider, e);
+          logger.error(
+            { respId, status: classified.status, type: classified.type, err: e },
+            "[%s] stream error status=%d type=%s %s",
+            respId,
+            classified.status,
+            classified.type,
+            truncateForLog(classified.message)
+          );
           const errObj = {
-            error: { message: String(e), type: "stream_error", code: 500 },
+            error: { message: classified.message, type: classified.type, code: classified.status },
           };
           safeEnqueue(encoder.encode(`event: error\ndata: ${JSON.stringify(errObj)}\n\n`));
         } finally {
@@ -1511,10 +1650,16 @@ async function handleChatCompletions(
     return new Response(stream, { headers });
   } catch (e) {
     activeRequests--;
-    const status = extractUpstreamStatusCode(e) ?? 500;
-    const msg = String(e);
-    logger.error({ respId, status }, "[%s] error status=%d %s", respId, status, truncateForLog(msg));
-    return openaiError(msg, status);
+    const classified = await classifyProviderError(provider, e);
+    logger.error(
+      { respId, status: classified.status, type: classified.type },
+      "[%s] error status=%d type=%s %s",
+      respId,
+      classified.status,
+      classified.type,
+      truncateForLog(classified.message)
+    );
+    return openaiError(classified.message, classified.status);
   }
 }
 

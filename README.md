@@ -133,6 +133,7 @@ curl http://127.0.0.1:8000/v1/chat/completions \
 | `POST` | `/v1/responses` | OpenAI Responses API |
 | `POST` | `/v1/messages` | Anthropic Messages API |
 | `GET` | `/debug/config` | 查看当前配置 |
+| `GET` | `/debug/cursor-agent` | Cursor Agent 连通性诊断（DNS/HTTPS） |
 
 ## 客户端对接
 
@@ -268,6 +269,7 @@ Cursor Agent 通过**提示工程**实现了 OpenAI 标准 function calling：
 3. 部署后访问：
    - 健康检查：`https://<your-service>.onrender.com/healthz`
    - OpenAI Base URL：`https://<your-service>.onrender.com/v1`
+   - Cursor 连通性诊断：`https://<your-service>.onrender.com/debug/cursor-agent`（可快速区分是网络/DNS还是鉴权）
 
 本地先验证 Docker：
 
