@@ -78,6 +78,21 @@ function normalizeApiKey(raw: string | undefined): string | null {
   return value || null;
 }
 
+function normalizeAuthToken(raw: string | undefined): string | null {
+  if (raw === undefined) return null;
+  let value = raw.trim();
+  if (
+    value.length >= 2 &&
+    ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
+  ) {
+    value = value.slice(1, -1).trim();
+  }
+  if (value.toLowerCase().startsWith("bearer ")) {
+    value = value.slice(7).trim();
+  }
+  return value || null;
+}
+
 /** Minimal shell-arg parser (shlex.split equivalent) for CURSOR_AGENT_EXTRA_ARGS. */
 function parseShellArgs(s: string): string[] {
   if (!s.trim()) return [];
@@ -300,6 +315,7 @@ export interface Settings {
   readonly cursor_agent_bin: string;
   readonly cursor_agent_workspace: string | null;
   readonly cursor_agent_api_key: string | null;
+  readonly cursor_agent_auth_token: string | null;
   readonly cursor_agent_model: string | null;
   readonly cursor_agent_stream_partial_output: boolean;
   readonly cursor_agent_disable_indexing: boolean;
@@ -386,6 +402,9 @@ function _createSettings(): Settings {
   const claudeOauthPath = envStr("CLAUDE_OAUTH_CREDS_PATH", "~/.claude/oauth_creds.json").trim() || "~/.claude/oauth_creds.json";
   const geminiOauthPath = envStr("GEMINI_OAUTH_CREDS_PATH", "~/.gemini/oauth_creds.json").trim() || "~/.gemini/oauth_creds.json";
   const cursorAgentApiKey = normalizeApiKey(process.env.CURSOR_AGENT_API_KEY ?? process.env.CURSOR_API_KEY);
+  const cursorAgentAuthToken = normalizeAuthToken(
+    process.env.CURSOR_AGENT_AUTH_TOKEN ?? process.env.CURSOR_AUTH_TOKEN
+  );
 
   const s: Settings = {
     effectiveLogMode(): string {
@@ -424,6 +443,7 @@ function _createSettings(): Settings {
     cursor_agent_bin: process.env.CURSOR_AGENT_BIN ?? "cursor-agent",
     cursor_agent_workspace: envStr("CURSOR_AGENT_WORKSPACE", "").trim() || null,
     cursor_agent_api_key: cursorAgentApiKey,
+    cursor_agent_auth_token: cursorAgentAuthToken,
     cursor_agent_model: envStr("CURSOR_AGENT_MODEL", "").trim() || null,
     cursor_agent_stream_partial_output: envBool("CURSOR_AGENT_STREAM_PARTIAL_OUTPUT", true),
     cursor_agent_disable_indexing: envBool("CURSOR_AGENT_DISABLE_INDEXING", true),

@@ -234,6 +234,7 @@ Cursor Agent 通过**提示工程**实现了 OpenAI 标准 function calling：
 | `CURSOR_AGENT_BIN` | `cursor-agent` | CLI 路径 |
 | `CURSOR_AGENT_WORKSPACE` | — | 工作目录（建议 `/tmp/cursor-empty-workspace`） |
 | `CURSOR_AGENT_API_KEY` | — | Cursor API Key |
+| `CURSOR_AGENT_AUTH_TOKEN` | — | Cursor Auth Token（优先级高于 API Key） |
 | `CURSOR_AGENT_MODEL` | — | 默认模型 |
 | `CODEX_ADVERTISED_MODELS` | — | `/v1/models` 返回的模型列表 |
 | `CODEX_MAX_CONCURRENCY` | `100` | 最大并发 |
@@ -265,7 +266,7 @@ Cursor Agent 通过**提示工程**实现了 OpenAI 标准 function calling：
 1. 将代码推送到 GitHub，Render 选择 **Blueprint**（会自动读取 `render.yaml`）。
 2. 在 Render 环境变量里至少设置：
    - `CODEX_GATEWAY_TOKEN`（建议设置）
-   - `CURSOR_AGENT_API_KEY`（必须，除非你在容器内做 `cursor-agent login`）
+   - `CURSOR_AGENT_AUTH_TOKEN` 或 `CURSOR_AGENT_API_KEY`（二选一，优先推荐 `CURSOR_AGENT_AUTH_TOKEN`）
 3. 部署后访问：
    - 健康检查：`https://<your-service>.onrender.com/healthz`
    - OpenAI Base URL：`https://<your-service>.onrender.com/v1`
@@ -277,7 +278,7 @@ Cursor Agent 通过**提示工程**实现了 OpenAI 标准 function calling：
 docker build -t cursorcli2api .
 docker run --rm -p 8000:8000 \
   -e CODEX_GATEWAY_TOKEN=sk-xxx \
-  -e CURSOR_AGENT_API_KEY=your-cursor-key \
+  -e CURSOR_AGENT_AUTH_TOKEN=your-cursor-auth-token \
   cursorcli2api
 ```
 

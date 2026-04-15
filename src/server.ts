@@ -379,6 +379,22 @@ function truncateForLog(text: string): string {
   return `${text.slice(0, limit)}\n... (truncated, ${text.length} chars total)`;
 }
 
+function resolveCursorAgentAuthMode(): "auth-token" | "api-key" | "none" {
+  if (settings.cursor_agent_auth_token) return "auth-token";
+  if (settings.cursor_agent_api_key) return "api-key";
+  return "none";
+}
+
+function buildCursorAgentAuthEnv(): Record<string, string> {
+  if (settings.cursor_agent_auth_token) {
+    return { CURSOR_AUTH_TOKEN: settings.cursor_agent_auth_token };
+  }
+  if (settings.cursor_agent_api_key) {
+    return { CURSOR_API_KEY: settings.cursor_agent_api_key };
+  }
+  return {};
+}
+
 function checkAuth(authorization: string | null | undefined): void {
   const token = settings.bearer_token;
   if (!token) return;
@@ -636,12 +652,20 @@ app.get("/debug/config", async (c) => {
     cursor_agent_workspace: settings.cursor_agent_workspace,
     cursor_agent_disable_indexing: settings.cursor_agent_disable_indexing,
     cursor_agent_extra_args: settings.cursor_agent_extra_args,
+    cursor_agent_auth_mode: resolveCursorAgentAuthMode(),
     cursor_agent_api_key_set: Boolean(settings.cursor_agent_api_key),
     cursor_agent_api_key_length: settings.cursor_agent_api_key?.length ?? 0,
     cursor_agent_api_key_source: process.env.CURSOR_AGENT_API_KEY !== undefined
       ? "CURSOR_AGENT_API_KEY"
       : process.env.CURSOR_API_KEY !== undefined
         ? "CURSOR_API_KEY"
+        : "",
+    cursor_agent_auth_token_set: Boolean(settings.cursor_agent_auth_token),
+    cursor_agent_auth_token_length: settings.cursor_agent_auth_token?.length ?? 0,
+    cursor_agent_auth_token_source: process.env.CURSOR_AGENT_AUTH_TOKEN !== undefined
+      ? "CURSOR_AGENT_AUTH_TOKEN"
+      : process.env.CURSOR_AUTH_TOKEN !== undefined
+        ? "CURSOR_AUTH_TOKEN"
         : "",
     claude_model: settings.claude_model,
     claude_use_oauth_api: settings.claude_use_oauth_api,
@@ -686,12 +710,20 @@ app.get("/debug/cursor-agent", async (c) => {
   const connectivity = await probeCursorConnectivity();
   return c.json({
     cursor_agent_bin: settings.cursor_agent_bin,
+    cursor_agent_auth_mode: resolveCursorAgentAuthMode(),
     cursor_agent_api_key_set: Boolean(settings.cursor_agent_api_key),
     cursor_agent_api_key_length: settings.cursor_agent_api_key?.length ?? 0,
     cursor_agent_api_key_source: process.env.CURSOR_AGENT_API_KEY !== undefined
       ? "CURSOR_AGENT_API_KEY"
       : process.env.CURSOR_API_KEY !== undefined
         ? "CURSOR_API_KEY"
+        : "",
+    cursor_agent_auth_token_set: Boolean(settings.cursor_agent_auth_token),
+    cursor_agent_auth_token_length: settings.cursor_agent_auth_token?.length ?? 0,
+    cursor_agent_auth_token_source: process.env.CURSOR_AGENT_AUTH_TOKEN !== undefined
+      ? "CURSOR_AGENT_AUTH_TOKEN"
+      : process.env.CURSOR_AUTH_TOKEN !== undefined
+        ? "CURSOR_AUTH_TOKEN"
         : "",
     connectivity,
   });
@@ -1155,7 +1187,6 @@ async function handleChatCompletions(
           ];
           if (settings.cursor_agent_disable_indexing) cmd.push("--disable-indexing");
           cmd.push(...settings.cursor_agent_extra_args);
-          if (settings.cursor_agent_api_key) cmd.push("--api-key", settings.cursor_agent_api_key);
           if (cursorModel) cmd.push("--model", cursorModel);
           if (settings.cursor_agent_stream_partial_output) cmd.push("--stream-partial-output");
           const { cmd: finalCmd, stdinData } = buildCursorAgentCmd(cmd, prompt);
@@ -1164,6 +1195,7 @@ async function handleChatCompletions(
           let fallbackText: string | null = null;
           for await (const evt of iterStreamJsonEvents({
             cmd: finalCmd,
+            env: buildCursorAgentAuthEnv(),
             timeoutMs: settings.timeout_seconds * 1000,
             totalTimeoutMs: settings.timeout_seconds * 1000,
             killOnResult: true,
@@ -1407,11 +1439,17 @@ async function handleChatCompletions(
                 ];
                 if (settings.cursor_agent_disable_indexing) cmd.push("--disable-indexing");
                 cmd.push(...settings.cursor_agent_extra_args);
-                if (settings.cursor_agent_api_key) cmd.push("--api-key", settings.cursor_agent_api_key);
                 if (cursorModel) cmd.push("--model", cursorModel);
                 if (settings.cursor_agent_stream_partial_output) cmd.push("--stream-partial-output");
                 const { cmd: cursorFinalCmd, stdinData: cursorStdinData } = buildCursorAgentCmd(cmd, prompt);
-                events = iterStreamJsonEvents({ cmd: cursorFinalCmd, timeoutMs: settings.timeout_seconds * 1000, totalTimeoutMs: settings.timeout_seconds * 1000, killOnResult: true, stdinData: cursorStdinData });
+                events = iterStreamJsonEvents({
+                  cmd: cursorFinalCmd,
+                  env: buildCursorAgentAuthEnv(),
+                  timeoutMs: settings.timeout_seconds * 1000,
+                  totalTimeoutMs: settings.timeout_seconds * 1000,
+                  killOnResult: true,
+                  stdinData: cursorStdinData,
+                });
               } else if (provider === "claude") {
                 const claudeModel = effectiveProviderModel ?? settings.claude_model ?? "sonnet";
                 if (useClaudeOauth) {

@@ -25,5 +25,7 @@ services:
         value: auto,gpt-5.3-codex,gpt-5.2
       - key: CODEX_GATEWAY_TOKEN
         sync: false
+      - key: CURSOR_AGENT_AUTH_TOKEN
+        sync: false
       - key: CURSOR_AGENT_API_KEY
         sync: false
