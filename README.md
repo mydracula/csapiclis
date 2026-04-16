@@ -235,6 +235,7 @@ Cursor Agent 通过**提示工程**实现了 OpenAI 标准 function calling：
 | `CURSOR_AGENT_WORKSPACE` | — | 工作目录（建议 `/tmp/cursor-empty-workspace`） |
 | `CURSOR_AGENT_API_KEY` | — | Cursor API Key |
 | `CURSOR_AGENT_AUTH_TOKEN` | — | Cursor Auth Token（优先级高于 API Key） |
+| `CURSOR_AGENT_AUTH_MODE` | `auto` | `auto`/`auth-token`/`api-key`，强制选择鉴权模式 |
 | `CURSOR_AGENT_MODEL` | — | 默认模型 |
 | `CODEX_ADVERTISED_MODELS` | — | `/v1/models` 返回的模型列表 |
 | `CODEX_MAX_CONCURRENCY` | `100` | 最大并发 |

@@ -11,6 +11,7 @@ import { fileURLToPath } from "url";
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type ApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
 export type GatewayProvider = "auto" | "codex" | "cursor-agent" | "claude" | "gemini";
+export type CursorAgentAuthMode = "auto" | "api-key" | "auth-token";
 
 // --- Paths ---
 const __filename = fileURLToPath(import.meta.url);
@@ -316,6 +317,7 @@ export interface Settings {
   readonly cursor_agent_workspace: string | null;
   readonly cursor_agent_api_key: string | null;
   readonly cursor_agent_auth_token: string | null;
+  readonly cursor_agent_auth_mode: CursorAgentAuthMode;
   readonly cursor_agent_model: string | null;
   readonly cursor_agent_stream_partial_output: boolean;
   readonly cursor_agent_disable_indexing: boolean;
@@ -405,6 +407,13 @@ function _createSettings(): Settings {
   const cursorAgentAuthToken = normalizeAuthToken(
     process.env.CURSOR_AGENT_AUTH_TOKEN ?? process.env.CURSOR_AUTH_TOKEN
   );
+  const cursorAgentAuthModeRaw = envStr("CURSOR_AGENT_AUTH_MODE", "auto").trim().toLowerCase();
+  const cursorAgentAuthMode: CursorAgentAuthMode =
+    cursorAgentAuthModeRaw === "api-key"
+      ? "api-key"
+      : cursorAgentAuthModeRaw === "auth-token"
+        ? "auth-token"
+        : "auto";
 
   const s: Settings = {
     effectiveLogMode(): string {
@@ -444,6 +453,7 @@ function _createSettings(): Settings {
     cursor_agent_workspace: envStr("CURSOR_AGENT_WORKSPACE", "").trim() || null,
     cursor_agent_api_key: cursorAgentApiKey,
     cursor_agent_auth_token: cursorAgentAuthToken,
+    cursor_agent_auth_mode: cursorAgentAuthMode,
     cursor_agent_model: envStr("CURSOR_AGENT_MODEL", "").trim() || null,
     cursor_agent_stream_partial_output: envBool("CURSOR_AGENT_STREAM_PARTIAL_OUTPUT", true),
     cursor_agent_disable_indexing: envBool("CURSOR_AGENT_DISABLE_INDEXING", true),

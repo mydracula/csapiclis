@@ -202,14 +202,19 @@ function ensureWorkspaceDir(dirPath: string | null | undefined): void {
   mkdirSync(resolved, { recursive: true });
 }
 
-function openaiError(message: string, statusCode = 500): Response {
+function openaiError(
+  message: string,
+  statusCode = 500,
+  type = "codex_gateway_error",
+  code: number | string | null = null
+): Response {
   return new Response(
     JSON.stringify({
       error: {
         message,
-        type: "codex_gateway_error",
+        type,
         param: null,
-        code: null,
+        code,
       },
     }),
     { status: statusCode, headers: { "Content-Type": "application/json" } }
@@ -380,19 +385,33 @@ function truncateForLog(text: string): string {
 }
 
 function resolveCursorAgentAuthMode(): "auth-token" | "api-key" | "none" {
-  if (settings.cursor_agent_auth_token) return "auth-token";
-  if (settings.cursor_agent_api_key) return "api-key";
+  const token = settings.cursor_agent_auth_token;
+  const apiKey = settings.cursor_agent_api_key;
+  const forced = settings.cursor_agent_auth_mode;
+  if (forced === "auth-token") return token ? "auth-token" : "none";
+  if (forced === "api-key") return apiKey ? "api-key" : "none";
+  if (token) return "auth-token";
+  if (apiKey && looksLikeAuthToken(apiKey)) return "auth-token";
+  if (apiKey) return "api-key";
   return "none";
 }
 
 function buildCursorAgentAuthEnv(): Record<string, string> {
-  if (settings.cursor_agent_auth_token) {
-    return { CURSOR_AUTH_TOKEN: settings.cursor_agent_auth_token };
+  const mode = resolveCursorAgentAuthMode();
+  if (mode === "auth-token") {
+    return { CURSOR_AUTH_TOKEN: settings.cursor_agent_auth_token ?? settings.cursor_agent_api_key ?? "" };
   }
-  if (settings.cursor_agent_api_key) {
-    return { CURSOR_API_KEY: settings.cursor_agent_api_key };
-  }
+  if (mode === "api-key") return { CURSOR_API_KEY: settings.cursor_agent_api_key ?? "" };
   return {};
+}
+
+function looksLikeAuthToken(value: string | null): boolean {
+  if (!value) return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith("eyJ")) return true;
+  const parts = trimmed.split(".");
+  return parts.length === 3 && parts.every((p) => p.length > 6);
 }
 
 function checkAuth(authorization: string | null | undefined): void {
@@ -652,9 +671,11 @@ app.get("/debug/config", async (c) => {
     cursor_agent_workspace: settings.cursor_agent_workspace,
     cursor_agent_disable_indexing: settings.cursor_agent_disable_indexing,
     cursor_agent_extra_args: settings.cursor_agent_extra_args,
+    cursor_agent_auth_mode_config: settings.cursor_agent_auth_mode,
     cursor_agent_auth_mode: resolveCursorAgentAuthMode(),
     cursor_agent_api_key_set: Boolean(settings.cursor_agent_api_key),
     cursor_agent_api_key_length: settings.cursor_agent_api_key?.length ?? 0,
+    cursor_agent_api_key_looks_like_auth_token: looksLikeAuthToken(settings.cursor_agent_api_key),
     cursor_agent_api_key_source: process.env.CURSOR_AGENT_API_KEY !== undefined
       ? "CURSOR_AGENT_API_KEY"
       : process.env.CURSOR_API_KEY !== undefined
@@ -710,9 +731,11 @@ app.get("/debug/cursor-agent", async (c) => {
   const connectivity = await probeCursorConnectivity();
   return c.json({
     cursor_agent_bin: settings.cursor_agent_bin,
+    cursor_agent_auth_mode_config: settings.cursor_agent_auth_mode,
     cursor_agent_auth_mode: resolveCursorAgentAuthMode(),
     cursor_agent_api_key_set: Boolean(settings.cursor_agent_api_key),
     cursor_agent_api_key_length: settings.cursor_agent_api_key?.length ?? 0,
+    cursor_agent_api_key_looks_like_auth_token: looksLikeAuthToken(settings.cursor_agent_api_key),
     cursor_agent_api_key_source: process.env.CURSOR_AGENT_API_KEY !== undefined
       ? "CURSOR_AGENT_API_KEY"
       : process.env.CURSOR_API_KEY !== undefined
@@ -1733,7 +1756,7 @@ async function handleChatCompletions(
       classified.type,
       truncateForLog(classified.message)
     );
-    return openaiError(classified.message, classified.status);
+    return openaiError(classified.message, classified.status, classified.type, classified.status);
   }
 }
 
