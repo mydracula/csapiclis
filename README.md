@@ -233,9 +233,9 @@ Cursor Agent 通过**提示工程**实现了 OpenAI 标准 function calling：
 | `CODEX_PRESET` | — | 预设名 |
 | `CURSOR_AGENT_BIN` | `cursor-agent` | CLI 路径 |
 | `CURSOR_AGENT_WORKSPACE` | — | 工作目录（建议 `/tmp/cursor-empty-workspace`） |
-| `CURSOR_AGENT_API_KEY` | — | Cursor API Key |
-| `CURSOR_AGENT_AUTH_TOKEN` | — | Cursor Auth Token（优先级高于 API Key） |
-| `CURSOR_AGENT_AUTH_MODE` | `auto` | `auto`/`auth-token`/`api-key`，强制选择鉴权模式 |
+| `CURSOR_AGENT_API_KEY` | — | Cursor API Key（推荐用于 Render 等服务端部署） |
+| `CURSOR_AGENT_AUTH_TOKEN` | — | Cursor Auth Token（仅在你明确持有可用 auth-token 时使用） |
+| `CURSOR_AGENT_AUTH_MODE` | `auto` | `auto`/`auth-token`/`api-key`；`auto` 在同时存在时优先走 API Key |
 | `CURSOR_AGENT_MODEL` | — | 默认模型 |
 | `CODEX_ADVERTISED_MODELS` | — | `/v1/models` 返回的模型列表 |
 | `CODEX_MAX_CONCURRENCY` | `100` | 最大并发 |
@@ -267,7 +267,10 @@ Cursor Agent 通过**提示工程**实现了 OpenAI 标准 function calling：
 1. 将代码推送到 GitHub，Render 选择 **Blueprint**（会自动读取 `render.yaml`）。
 2. 在 Render 环境变量里至少设置：
    - `CODEX_GATEWAY_TOKEN`（建议设置）
-   - `CURSOR_AGENT_AUTH_TOKEN` 或 `CURSOR_AGENT_API_KEY`（二选一，优先推荐 `CURSOR_AGENT_AUTH_TOKEN`）
+   - `CURSOR_AGENT_API_KEY`（推荐）
+   - `CURSOR_AGENT_AUTH_MODE=api-key`（建议显式设置，避免歧义）
+   - 若改用 token，则设置 `CURSOR_AGENT_AUTH_TOKEN` + `CURSOR_AGENT_AUTH_MODE=auth-token`
+   - 不要同时填写 `CURSOR_AGENT_API_KEY` 和 `CURSOR_AGENT_AUTH_TOKEN`
 3. 部署后访问：
    - 健康检查：`https://<your-service>.onrender.com/healthz`
    - OpenAI Base URL：`https://<your-service>.onrender.com/v1`
@@ -279,9 +282,20 @@ Cursor Agent 通过**提示工程**实现了 OpenAI 标准 function calling：
 docker build -t cursorcli2api .
 docker run --rm -p 8000:8000 \
   -e CODEX_GATEWAY_TOKEN=sk-xxx \
-  -e CURSOR_AGENT_AUTH_TOKEN=your-cursor-auth-token \
+  -e CURSOR_AGENT_AUTH_MODE=api-key \
+  -e CURSOR_AGENT_API_KEY=your-cursor-api-key \
   cursorcli2api
 ```
+
+常见鉴权报错排查：
+
+- 报错 `Your stored authentication is invalid. Please log in again.`：
+  - 这通常是进程走到了 auth-token/登录态路径，而不是 API key 路径
+  - 在 Render 上优先用 `CURSOR_AGENT_API_KEY` + `CURSOR_AGENT_AUTH_MODE=api-key`
+  - 清空或删除 `CURSOR_AGENT_AUTH_TOKEN`/`CURSOR_AUTH_TOKEN`
+- 报错 `The provided API key is invalid.`：
+  - 说明已经走到 API key 路径，但 key 本身被上游拒绝
+- 可用 `/debug/cursor-agent` 看 `cursor_agent_auth_mode` 和 `cursor_agent_auth_resolution`
 
 ### WSL2 + Windows
 

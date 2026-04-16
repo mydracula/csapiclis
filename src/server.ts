@@ -226,6 +226,7 @@ const HTTPX_STATUS_RE = /\b(?:Client|Server) error '(\d{3})\b/;
 const GENERIC_STATUS_RE = /\bstatus\s*[=:]\s*(\d{3})\b/;
 const ANSI_ESCAPE_RE = /\x1b\[[0-9;]*m/g;
 const CURSOR_INVALID_KEY_RE = /\bprovided api key is invalid\b/i;
+const CURSOR_STORED_AUTH_INVALID_RE = /\bstored authentication is invalid\b|\brun 'agent login'\b/i;
 const CURSOR_NETWORK_HINT_RE = /\b(ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|ECONNREFUSED|getaddrinfo|dns|resolve|fetch failed|network|ap2\.cursor\.sh)\b/i;
 
 function extractUpstreamStatusCode(err: unknown): number | null {
@@ -346,6 +347,8 @@ async function classifyProviderError(provider: string, err: unknown): Promise<Cl
   }
 
   const looksLikeInvalidKey = CURSOR_INVALID_KEY_RE.test(clean);
+  const looksLikeStoredAuthInvalid = CURSOR_STORED_AUTH_INVALID_RE.test(clean);
+  const looksLikeAuthFailure = looksLikeInvalidKey || looksLikeStoredAuthInvalid;
   const looksLikeNetwork = CURSOR_NETWORK_HINT_RE.test(clean);
 
   if (looksLikeInvalidKey || looksLikeNetwork) {
@@ -370,6 +373,14 @@ async function classifyProviderError(provider: string, err: unknown): Promise<Cl
     }
   }
 
+  if (looksLikeAuthFailure) {
+    return {
+      status: statusFromMsg ?? 401,
+      type: "auth_error",
+      message: clean,
+    };
+  }
+
   return {
     status: statusFromMsg ?? 500,
     message: clean,
@@ -384,25 +395,60 @@ function truncateForLog(text: string): string {
   return `${text.slice(0, limit)}\n... (truncated, ${text.length} chars total)`;
 }
 
-function resolveCursorAgentAuthMode(): "auth-token" | "api-key" | "none" {
+interface CursorAgentAuthSelection {
+  readonly mode: "auth-token" | "api-key" | "none";
+  readonly credential: string | null;
+  readonly reason: string;
+}
+
+function resolveCursorAgentAuthSelection(): CursorAgentAuthSelection {
   const token = settings.cursor_agent_auth_token;
   const apiKey = settings.cursor_agent_api_key;
   const forced = settings.cursor_agent_auth_mode;
-  if (forced === "auth-token") return token ? "auth-token" : "none";
-  if (forced === "api-key") return apiKey ? "api-key" : "none";
-  if (token) return "auth-token";
-  if (apiKey && looksLikeAuthToken(apiKey)) return "auth-token";
-  if (apiKey) return "api-key";
-  return "none";
+
+  if (forced === "auth-token") {
+    if (token && looksLikeAuthToken(token)) {
+      return { mode: "auth-token", credential: token, reason: "forced-auth-token:token" };
+    }
+    if (token) {
+      return { mode: "api-key", credential: token, reason: "forced-auth-token:fallback-to-api-key" };
+    }
+    if (apiKey && looksLikeAuthToken(apiKey)) {
+      return { mode: "auth-token", credential: apiKey, reason: "forced-auth-token:api-key-looked-like-auth-token" };
+    }
+    if (apiKey) {
+      return { mode: "api-key", credential: apiKey, reason: "forced-auth-token:fallback-to-api-key-var" };
+    }
+    return { mode: "none", credential: null, reason: "forced-auth-token:no-credential" };
+  }
+
+  if (forced === "api-key") {
+    if (apiKey) return { mode: "api-key", credential: apiKey, reason: "forced-api-key:api-key" };
+    if (token) return { mode: "api-key", credential: token, reason: "forced-api-key:used-auth-token-var" };
+    return { mode: "none", credential: null, reason: "forced-api-key:no-credential" };
+  }
+
+  // Auto mode: prefer API key in server deployments to avoid depending on stored login state.
+  if (apiKey) return { mode: "api-key", credential: apiKey, reason: "auto:api-key" };
+  if (token && looksLikeAuthToken(token)) return { mode: "auth-token", credential: token, reason: "auto:auth-token" };
+  if (token) return { mode: "api-key", credential: token, reason: "auto:token-fallback-to-api-key" };
+  return { mode: "none", credential: null, reason: "auto:none" };
 }
 
 function buildCursorAgentAuthEnv(): Record<string, string> {
-  const mode = resolveCursorAgentAuthMode();
-  if (mode === "auth-token") {
-    return { CURSOR_AUTH_TOKEN: settings.cursor_agent_auth_token ?? settings.cursor_agent_api_key ?? "" };
+  const selection = resolveCursorAgentAuthSelection();
+  const base: Record<string, string> = {
+    CURSOR_AUTH_TOKEN: "",
+    CURSOR_API_KEY: "",
+    CURSOR_AGENT_AUTH_TOKEN: "",
+    CURSOR_AGENT_API_KEY: "",
+  };
+  if (selection.mode === "auth-token" && selection.credential) {
+    base.CURSOR_AUTH_TOKEN = selection.credential;
+  } else if (selection.mode === "api-key" && selection.credential) {
+    base.CURSOR_API_KEY = selection.credential;
   }
-  if (mode === "api-key") return { CURSOR_API_KEY: settings.cursor_agent_api_key ?? "" };
-  return {};
+  return base;
 }
 
 function looksLikeAuthToken(value: string | null): boolean {
@@ -662,6 +708,7 @@ app.get("/debug/config", async (c) => {
   } catch (e) {
     return c.json({ error: { message: String(e) } }, 401);
   }
+  const cursorAuthSelection = resolveCursorAgentAuthSelection();
   return c.json({
     provider: settings.provider,
     allow_client_provider_override: settings.allow_client_provider_override,
@@ -672,7 +719,8 @@ app.get("/debug/config", async (c) => {
     cursor_agent_disable_indexing: settings.cursor_agent_disable_indexing,
     cursor_agent_extra_args: settings.cursor_agent_extra_args,
     cursor_agent_auth_mode_config: settings.cursor_agent_auth_mode,
-    cursor_agent_auth_mode: resolveCursorAgentAuthMode(),
+    cursor_agent_auth_mode: cursorAuthSelection.mode,
+    cursor_agent_auth_resolution: cursorAuthSelection.reason,
     cursor_agent_api_key_set: Boolean(settings.cursor_agent_api_key),
     cursor_agent_api_key_length: settings.cursor_agent_api_key?.length ?? 0,
     cursor_agent_api_key_looks_like_auth_token: looksLikeAuthToken(settings.cursor_agent_api_key),
@@ -729,10 +777,12 @@ app.get("/debug/cursor-agent", async (c) => {
     return c.json({ error: { message: String(e) } }, 401);
   }
   const connectivity = await probeCursorConnectivity();
+  const cursorAuthSelection = resolveCursorAgentAuthSelection();
   return c.json({
     cursor_agent_bin: settings.cursor_agent_bin,
     cursor_agent_auth_mode_config: settings.cursor_agent_auth_mode,
-    cursor_agent_auth_mode: resolveCursorAgentAuthMode(),
+    cursor_agent_auth_mode: cursorAuthSelection.mode,
+    cursor_agent_auth_resolution: cursorAuthSelection.reason,
     cursor_agent_api_key_set: Boolean(settings.cursor_agent_api_key),
     cursor_agent_api_key_length: settings.cursor_agent_api_key?.length ?? 0,
     cursor_agent_api_key_looks_like_auth_token: looksLikeAuthToken(settings.cursor_agent_api_key),
